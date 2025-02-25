@@ -1,54 +1,76 @@
 import streamlit as st
-from langchain_community.document_loaders.csv_loader import CSVLoader
 from pathlib import Path
 import os
+import asyncio
+import pickle
+import warnings
+import pandas as pd
 from dotenv import load_dotenv
 
 import faiss
-from langchain_community.docstore.in_memory import InMemoryDocstore
 from langchain_community.vectorstores import FAISS
+from langchain_community.docstore.in_memory import InMemoryDocstore
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.document_loaders.csv_loader import CSVLoader
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 
 from langchain_groq import ChatGroq 
-from langchain_community.embeddings import HuggingFaceEmbeddings 
-
-import warnings
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-# Load environment variables from a .env file
+# Load environment variables
 load_dotenv()
 
-# Set the OpenAI API key environment variable
+# Set API keys
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 os.environ["HUGGINGFACEHUB_API_TOKEN"] = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 
-llm = ChatGroq(model="deepseek-r1-distill-llama-70b")
+# File paths
+CSV_FILE_PATH = "temp_matatu_routes.csv"
+FAISS_INDEX_PATH = "faiss_index.pkl"
 
-# Path to the CSV file in the current directory
-csv_file_path = Path("temp_matatu_routes.csv")
+# Cache LLM to prevent reloading on every query
+@st.cache_resource
+def load_llm():
+    return ChatGroq(model="deepseek-r1-distill-llama-70b")
 
-# Load and split CSV file documents
-loader = CSVLoader(file_path=csv_file_path)
-docs = loader.load_and_split()
+# Cache embeddings and vector store for fast retrieval
+@st.cache_resource
+def load_vector_store():
+    if os.path.exists(FAISS_INDEX_PATH):
+        # Load the precomputed FAISS index
+        with open(FAISS_INDEX_PATH, "rb") as f:
+            return pickle.load(f).as_retriever()
+    else:
+        # Load CSV data
+        loader = CSVLoader(file_path=Path(CSV_FILE_PATH))
+        docs = loader.load_and_split()
 
-# Initiate faiss vector store and huggingface embedding
-embeddings = HuggingFaceEmbeddings()
-index = faiss.IndexFlatL2(len(HuggingFaceEmbeddings().embed_query(" ")))
-vector_store = FAISS(
-    embedding_function=HuggingFaceEmbeddings(),
-    index=index,
-    docstore=InMemoryDocstore(),
-    index_to_docstore_id={}
-)
+        # Initialize embeddings
+        embeddings = HuggingFaceEmbeddings()
+        index = faiss.IndexFlatL2(len(embeddings.embed_query(" ")))
 
-vector_store.add_documents(documents=docs)
+        # Create FAISS vector store
+        vector_store = FAISS(
+            embedding_function=embeddings,
+            index=index,
+            docstore=InMemoryDocstore(),
+            index_to_docstore_id={}
+        )
+        vector_store.add_documents(docs)
 
-retriever = vector_store.as_retriever()
+        # Save FAISS index
+        with open(FAISS_INDEX_PATH, "wb") as f:
+            pickle.dump(vector_store, f)
+
+        return vector_store.as_retriever()
+
+llm = load_llm()
+retriever = load_vector_store()
 
 # Set up system prompt
 system_prompt = (
@@ -71,6 +93,10 @@ prompt = ChatPromptTemplate.from_messages([
 # Create the question-answer chain
 question_answer_chain = create_stuff_documents_chain(llm, prompt)
 rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+
+# Async function to handle retrieval in the background
+async def async_retrieve_answer(query):
+    return await asyncio.to_thread(rag_chain.invoke, {"input": query})
 
 def main():
     # Custom CSS for styling
@@ -157,22 +183,22 @@ def main():
     st.markdown("<h1 style='text-align: center; font-size: 50px; color: #003d5c;'>Invisible Disability Assistant</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; font-size: 20px; color: #444;'>Nairobi Disability Support Platform</p>", unsafe_allow_html=True)
 
-    # Output Window
-    output_window = st.empty()  # Placeholder for dynamic output
-    with output_window.container():
-        st.markdown("<div class='output-window'>Output will be displayed here...</div>", unsafe_allow_html=True)
+    # Output Window Placeholder
+    output_window = st.empty()
 
-    # Input and Submit Button Section
+    # User Input
     query = st.text_input("", placeholder="Type your query here", key="input-field")
+
+    # Submit Button
     if st.button("Submit", key="submit-button"):
         if query:
             try:
-                response = rag_chain.invoke({"input": query})
-                output_window.markdown(f"<div class='output-window'>{response['answer']}</div>", unsafe_allow_html=True)
+                response = asyncio.run(async_retrieve_answer(query))
+                output_window.write(response["answer"])
             except Exception as e:
-                output_window.markdown(f"<div class='output-window'>Error: {e}</div>", unsafe_allow_html=True)
+                output_window.write(f"Error: {e}")
         else:
-            output_window.markdown("<div class='output-window'>Please enter a query!</div>", unsafe_allow_html=True)
+            output_window.write("Please enter a query!")
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,7 @@
-langchain
-unstructured[all-docs]
-langchain-community
-gradio
-faiss-cpu
-langchain_groq
-sentence-transformers
+langchain==0.3.19
+langchain-community==0.3.18
+gradio==5.17.1
+faiss-cpu==1.10.0
+langchain_groq==0.2.4
+sentence-transformers==3.4.1
+streamlit==1.42.2
