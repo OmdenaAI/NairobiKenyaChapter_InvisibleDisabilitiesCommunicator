@@ -19,10 +19,10 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 
 from langchain_groq import ChatGroq
 
-# import gettext
-
-# from googletrans import Translator
-from deep_translator import GoogleTranslator
+import gettext
+from deep_translator import (
+    GoogleTranslator,
+)  # Replaced googletrans with deep-translator
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -34,7 +34,6 @@ load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 os.environ["HUGGINGFACEHUB_API_TOKEN"] = os.getenv("HUGGINGFACEHUB_API_TOKEN")
 
-
 # File paths
 CSV_FILE_PATH = "temp_matatu_routes.csv"
 FAISS_INDEX_PATH = "faiss_index.pkl"
@@ -42,7 +41,18 @@ FAISS_INDEX_PATH = "faiss_index.pkl"
 # Language sidebar selection
 language = st.sidebar.selectbox("Select Language", ["English", "Swahili"])
 
-# Configure translations
+# Configure gettext for UI translations
+locales_dir = "locales"
+translation = gettext.translation(
+    "messages",
+    localedir=locales_dir,
+    languages=["sw" if language == "Swahili" else "en"],
+    fallback=True,
+)
+translation.install()
+_ = translation.gettext  # Shortcut for gettext translations
+
+# Configure AI response translation
 translator = GoogleTranslator(
     source="auto", target="sw" if language == "Swahili" else "en"
 )
@@ -62,7 +72,7 @@ def load_vector_store():
             with open(FAISS_INDEX_PATH, "rb") as f:
                 return pickle.load(f).as_retriever()
         except Exception:
-            st.warning("FAISS index is corrupted. Rebuilding...")
+            st.warning(_("FAISS index is corrupted. Rebuilding..."))
 
     # Load CSV data
     loader = CSVLoader(file_path=Path(CSV_FILE_PATH))
@@ -92,11 +102,11 @@ llm = load_llm()
 retriever = load_vector_store()
 
 # Set up system prompt
-system_prompt = (
+system_prompt = _(
     "You are an assistant for question-answering tasks. "
     "Use the following pieces of retrieved context to answer "
     "the question. If the context does not contain relevant "
-    "information, respond with 'I do not know'.  Do not add "
+    "information, respond with 'I do not know'. Do not add "
     "any extra information beyond what is in the retrieved "
     "context. Use three sentences maximum and keep the "
     "answer concise."
@@ -122,121 +132,39 @@ async def async_retrieve_answer(query):
 
 
 def main():
-    # Custom CSS for styling
+    # Title Section with gettext translations
     st.markdown(
-        """
-        <style>
-        /* Remove default padding and margin */
-        html, body, .stApp {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-        }
-
-        /* Full-width background gradient */
-        .stApp {
-            background: linear-gradient(to right, #74ebd5, #acb6e5);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-        }
-
-        /* Full-width output window */
-        .output-window {
-            background-color: #ffffff;
-            padding: 20px;
-            border: 1px solid #cccccc;
-            border-radius: 10px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-            width: 90%; /* Use 90% of the screen width */
-            height: 300px; /* Increased height */
-            overflow-y: auto;
-            margin: 20px auto; /* Center alignment */
-            text-align: left;
-        }
-
-        /* Full-width input section */
-        .input-section {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            margin-top: 20px;
-            width: 90%; /* Use 90% of the screen width */
-            margin-left: auto;
-            margin-right: auto;
-        }
-
-        /* Input box styling */
-        .input-box {
-            background-color: #ffffff;
-            padding: 10px;
-            border: 1px solid #cccccc;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-            margin-bottom: 10px; /* Space between input box and button */
-        }
-
-        /* Submit button styling */
-        .submit-button {
-            background-color: #00698f;
-            color: #ffffff;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-            text-align: center;
-            display: block;
-            margin-left: auto;
-            margin-right: auto;
-            width: 200px; /* Adjust the width as needed */
-        }
-
-        .submit-button:hover {
-            background-color: #003d5c;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Title Section
-    st.markdown(
-        "<h1 style='text-align: center; font-size: 50px; color: #003d5c;'>Invisible Disability Assistant</h1>",
+        f"<h1 style='text-align: center; font-size: 50px; color: #003d5c;'>{_('Invisible Disability Assistant')}</h1>",
         unsafe_allow_html=True,
     )
     st.markdown(
-        "<p style='text-align: center; font-size: 20px; color: #444;'>Nairobi Disability Support Platform</p>",
+        f"<p style='text-align: center; font-size: 20px; color: #444;'>{_('Nairobi Disability Support Platform')}</p>",
         unsafe_allow_html=True,
     )
 
-    # Output Window Placeholder
-    output_window = st.empty()
-
-    # User Input
-    query = st.text_input("", placeholder="Type your query here", key="input-field")
+    # User Input Section
+    query = st.text_input("", placeholder=_("Type your query here"), key="input-field")
 
     # Submit Button
-    if st.button("Submit", key="submit-button"):
+    if st.button(_("Submit"), key="submit-button"):
         if query:
             try:
-                response = asyncio.run(async_retrieve_answer(query))
-                # output_window.write(response["answer"])
+                # Use asyncio.create_task() instead of asyncio.run()
+                response_task = asyncio.create_task(async_retrieve_answer(query))
+                response = asyncio.run(response_task)
+
                 translated_response = response["answer"]
 
-                # Translate AI response is language is swahili
+                # Translate AI response if Swahili is selected
                 if language == "Swahili":
-                    translated_response = translator.translate(
-                        response["answer"], dest="sw"
-                    ).text
+                    translated_response = translator.translate(response["answer"])
 
                 st.write(translated_response)
+
             except Exception as e:
                 st.write(f"Error: {e}")
         else:
-            st.write("Please enter a query!")
+            st.write(_("Please enter a query!"))
 
 
 if __name__ == "__main__":
